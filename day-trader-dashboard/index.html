@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Day Trader Dashboard</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#15181d; --mute:#5b6572; --line:#d9dee5; --acc:#1b5fd6; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#0f1216; --card:#181c22; --ink:#e8ebef; --mute:#97a1ad; --line:#2a313a; --acc:#6aa0ff; --bad:#ff8a80; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.sub { color:var(--mute); margin:0 0 20px; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+  input, select, button { font:inherit; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
+  input { width:120px; text-transform:uppercase; }
+  button { cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; margin:12px 0; overflow:hidden; }
+  .card h2 { font-size:13px; margin:0; padding:8px 12px; border-bottom:1px solid var(--line); color:var(--mute); font-weight:600; display:flex; justify-content:space-between; gap:8px; }
+  .card h2 code { font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  pre { margin:0; padding:12px; white-space:pre-wrap; word-break:break-word; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; }
+  .fail h2 span { color:var(--bad); }
+  .note { color:var(--mute); font-size:13px; margin-top:24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Day Trader Dashboard</h1>
+  <p class="sub">Runs the read-only trader skills on your machine. It cannot place orders.</p>
+
+  <div class="bar">
+    <input id="sym" value="SOXL" maxlength="10" aria-label="Ticker" autocomplete="off">
+    <select id="setup" aria-label="Setup"><option value="orb">Opening-range breakout</option><option value="level">Level</option></select>
+    <button class="primary" data-tool="pipeline">Entry + exit + time machine</button>
+  </div>
+  <div class="bar">
+    <button data-tool="entry">Entry check</button>
+    <button data-tool="news">News (24h)</button>
+    <button data-tool="exit">Exit plan</button>
+    <button data-tool="timemachine">Time machine</button>
+    <button data-tool="alerts">Price</button>
+  </div>
+
+  <div id="out" aria-live="polite"></div>
+
+  <p class="note">Data comes from free, unofficial public sources (Yahoo Finance, SEC EDGAR) and can lag or fail. The time machine is a simulation, not a prediction. Not financial advice; most day traders lose money.</p>
+</main>
+<script>
+const out = document.getElementById('out');
+const btns = document.querySelectorAll('button[data-tool]');
+
+function card(r) {
+  const d = document.createElement('div');
+  d.className = 'card' + (r.code ? ' fail' : '');
+  const h = document.createElement('h2');
+  const c = document.createElement('code'); c.textContent = r.cmd;
+  const s = document.createElement('span'); s.textContent = r.code ? 'exit ' + r.code : 'ok';
+  h.append(c, s);
+  const p = document.createElement('pre'); p.textContent = r.output || '(no output)';
+  d.append(h, p);
+  return d;
+}
+
+async function go(tool) {
+  const sym = document.getElementById('sym').value.trim().toUpperCase();
+  const q = new URLSearchParams({ tool, symbol: sym, setup: document.getElementById('setup').value });
+  btns.forEach(b => b.disabled = true);
+  out.replaceChildren(Object.assign(document.createElement('p'), { textContent: 'Running ' + tool + ' for ' + sym + '...' }));
+  try {
+    const r = await fetch('/api/run?' + q);
+    const j = await r.json();
+    out.replaceChildren(...(j.error ? [Object.assign(document.createElement('p'), { textContent: j.error })] : j.results.map(card)));
+  } catch (e) {
+    out.replaceChildren(Object.assign(document.createElement('p'), { textContent: 'Request failed: ' + e }));
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+btns.forEach(b => b.addEventListener('click', () => go(b.dataset.tool)));
+</script>
+</body>
+</html>
