@@ -46,6 +46,13 @@
     <button data-tool="alerts">Price</button>
   </div>
 
+  <div class="bar">
+    <select id="kind" aria-label="Scan type"><option value="daily">Pre-market setups (daily charts)</option><option value="orb">Opening-range breakouts (today)</option></select>
+    <select id="limit" aria-label="How many stocks"><option value="200">First 200 stocks (fast)</option><option value="1000">First 1,000 stocks</option><option value="all">Whole market (~5,900, slow)</option></select>
+    <input id="syms" placeholder="or tickers: SOXL,TSLA" style="width:190px;text-transform:uppercase" aria-label="Tickers to scan instead">
+    <button id="scan">Scan the market</button>
+  </div>
+
   <div id="out" aria-live="polite"></div>
 
   <p class="note">Data comes from free, unofficial public sources (Yahoo Finance, SEC EDGAR) and can lag or fail. The time machine is a simulation, not a prediction. Not financial advice; most day traders lose money.</p>
@@ -82,6 +89,35 @@ async function go(tool) {
   }
 }
 btns.forEach(b => b.addEventListener('click', () => go(b.dataset.tool)));
+
+const scanBtn = document.getElementById('scan');
+function say(text) { out.replaceChildren(Object.assign(document.createElement('p'), { textContent: text })); }
+
+scanBtn.addEventListener('click', async () => {
+  const q = new URLSearchParams({
+    kind: document.getElementById('kind').value,
+    limit: document.getElementById('limit').value,
+    symbols: document.getElementById('syms').value.replace(/\s/g, ''),
+  });
+  scanBtn.disabled = true;
+  try {
+    const start = await (await fetch('/api/scan/start?' + q)).json();
+    if (start.error) { say(start.error); return; }
+    for (;;) {
+      const s = await (await fetch('/api/scan/status?id=' + start.id)).json();
+      if (s.error) { say(s.error); return; }
+      const done = s.state === 'done';
+      out.replaceChildren(card({ cmd: 'market scan (' + s.seconds + 's)' + (done ? '' : ' running...'),
+                                 code: done ? s.code : 0, output: s.log }));
+      if (done) return;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } catch (e) {
+    say('Request failed: ' + e);
+  } finally {
+    scanBtn.disabled = false;
+  }
+});
 </script>
 </body>
 </html>

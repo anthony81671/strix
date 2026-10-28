@@ -13,6 +13,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -65,6 +68,54 @@ def run(tool, sym, q):
     return {"symbol": sym, "results": results}
 
 
+# --- market scan: slow (thousands of charts), so it runs as a background job ---
+SCAN_LIMITS = {"200", "1000", "all"}
+JOBS = {}                      # id -> {"state", "log", "code", "started"}
+JOBS_LOCK = threading.Lock()
+
+
+def scan_job(job, kind, symbols, limit):
+    cwd = os.path.join(DATA, "_market")
+    os.makedirs(cwd, exist_ok=True)
+    scan = script("scanner", "scan.py")
+    steps = []
+    if not symbols and not os.path.exists(os.path.join(cwd, "trader", "universe.txt")):
+        steps.append(scan + ["universe"])                  # one-time symbol list download
+    run_args = scan + [kind]
+    if symbols:
+        run_args += ["--symbols", ",".join(symbols)]
+    elif limit != "all":
+        run_args += ["--limit", limit]
+    steps.append(run_args + ["--show", "40"])
+    job["code"] = 0
+    for argv in steps:
+        job["log"] += "$ python3 %s\n" % " ".join([os.path.relpath(argv[1], SKILLS)] + argv[2:])
+        p = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in p.stdout:
+            job["log"] += line
+        job["code"] = p.wait()
+        if job["code"]:
+            break
+    job["state"] = "done"
+
+
+def start_scan(q):
+    kind = "orb" if q.get("kind") == "orb" else "daily"
+    limit = q.get("limit", "200")
+    if limit not in SCAN_LIMITS:
+        raise ValueError("limit")
+    symbols = [x.strip().upper() for x in (q.get("symbols") or "").split(",") if x.strip()]
+    if len(symbols) > 50 or any(not SYMBOL.match(x) for x in symbols):
+        raise ValueError("symbols")
+    with JOBS_LOCK:
+        if any(j["state"] == "running" for j in JOBS.values()):
+            return {"error": "a scan is already running"}
+        jid = uuid.uuid4().hex[:8]
+        JOBS[jid] = job = {"state": "running", "log": "", "code": None, "started": time.time()}
+    threading.Thread(target=scan_job, args=(job, kind, symbols, limit), daemon=True).start()
+    return {"id": jid}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status, body, ctype):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
@@ -80,6 +131,19 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/":
             with open(os.path.join(HERE, "index.html"), "rb") as fh:
                 return self._send(200, fh.read(), "text/html; charset=utf-8")
+        if u.path in ("/api/scan/start", "/api/scan/status"):
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            try:
+                if u.path == "/api/scan/start":
+                    body = start_scan(q)
+                else:
+                    j = JOBS.get(q.get("id", ""))
+                    body = ({"error": "unknown scan"} if j is None else
+                            {"state": j["state"], "code": j["code"], "log": j["log"],
+                             "seconds": int(time.time() - j["started"])})
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": "bad " + str(e)}), "application/json")
+            return self._send(200, json.dumps(body), "application/json")
         if u.path == "/api/run":
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             sym = (q.get("symbol") or "").strip().upper()
