@@ -56,6 +56,12 @@ def run(tool, sym, q):
         return {"error": "unknown tool"}
     cwd = os.path.join(DATA, sym)
     os.makedirs(cwd, exist_ok=True)
+    if tool in ("entry", "pipeline"):       # a fresh entry check must not feed on yesterday's trigger
+        for stale in ("entry.json", "plan.json"):
+            try:
+                os.remove(os.path.join(cwd, "trader", stale))
+            except OSError:
+                pass
     results = []
     for argv in cmds:
         label = " ".join(["python3"] + [os.path.relpath(argv[1], SKILLS)] + argv[2:])
@@ -65,6 +71,15 @@ def run(tool, sym, q):
         except subprocess.TimeoutExpired:
             out, code = "timed out after %ds" % TIMEOUT, 124
         results.append({"cmd": label, "code": code, "output": out})
+        sys.stderr.write("[%s] %s -> exit %d\n" % (sym, label, code))
+        if tool == "pipeline" and (code or ("entry.py" in label and "TRIGGERED" not in out)):
+            results.append({"cmd": "pipeline stopped", "code": 0, "output": (
+                ("A step failed (see its output above), so the rest was skipped.\n" if code else
+                 "No triggered entry, so there is nothing to plan or replay yet.\n") +
+                "The entry check only fires after the first 5-minute bar CLOSES above the opening range "
+                "(9:30-9:45 ET), so it says waiting before ~9:50 and has nothing to report when the "
+                "market is closed or the stock never broke out. Try again during the session.")})
+            break
     return {"symbol": sym, "results": results}
 
 
